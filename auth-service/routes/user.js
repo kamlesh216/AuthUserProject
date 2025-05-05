@@ -5,12 +5,12 @@ const {
   signup,
   login,
   googleOAuthHandler,
-  facebookLogin,
+  facebookOAuthHandler,
 } = require("../controllers/auth");
 
 router.post("/signup", signup);
 router.post("/login", login);
 router.post("/google-auth", googleOAuthHandler);
-router.post("/facebook-login", facebookLogin);
+router.post("/facebook-auth", facebookOAuthHandler);
 
 module.exports = router;

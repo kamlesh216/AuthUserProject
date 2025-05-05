@@ -136,21 +136,82 @@ exports.googleOAuthHandler = async (req, res) => {
 };
 
 // FACEBOOK LOGIN
-exports.facebookLogin = async (req, res) => {
-    const { accessToken, userID } = req.body;
-    try {
-        const fbURL = `https://graph.facebook.com/${userID}?fields=id,name,email&access_token=${accessToken}`;
-        const response = await axios.get(fbURL);
-        const { email, name } = response.data;
+exports.facebookOAuthHandler = async (req, res) => {
+  const { code } = req.body;
 
-        let user = await User.findOne({ email });
-        if (!user) {
-            user = await User.create({ name, email, password: "" });
-        }
+  try {
+    // 1. Exchange code for access token
+    const tokenRes = await axios.get(
+      `https://graph.facebook.com/v17.0/oauth/access_token`,
+      {
+        params: {
+          client_id: process.env.FB_CLIENT_ID,
+          client_secret: process.env.FB_CLIENT_SECRET,
+          redirect_uri: process.env.FB_REDIRECT_URI,
+          code,
+        },
+      }
+    );
 
-        const jwtToken = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '1h' });
-        res.json({ success: true, token: jwtToken, user: { name: user.name, email: user.email } });
-    } catch (err) {
-        res.status(400).json({ success: false, message: 'Invalid Facebook token' });
+    const { access_token } = tokenRes.data;
+
+    // 2. Use access token to get user info
+    const userInfoRes = await axios.get(
+      `https://graph.facebook.com/me?fields=name,email`,
+      {
+        headers: {
+          Authorization: `Bearer ${access_token}`,
+        },
+      }
+    );
+
+    const { name, email } = userInfoRes.data;
+    if (!email) {
+      return res.status(400).json({ success: false, message: "Email not found" });
     }
+
+    // 3. Check or create user in auth DB
+    let user = await User.findOne({ email });
+    let isNewUser = false;
+
+    if (!user) {
+      user = await User.create({ name, email, password: "" });
+      isNewUser = true;
+    }
+
+    // 4. Generate JWT
+    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: "1h" });
+
+    // 5. If new user, sync with profile service
+    if (isNewUser) {
+      try {
+        await axios.post(
+          process.env.PROFILE_SERVICE_URL,
+          {
+            userId: user._id,
+            name,
+            email,
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          }
+        );
+      } catch (err) {
+        console.error("Profile sync failed:", err.response?.data || err.message);
+      }
+    }
+
+    // 6. Respond with token and user
+    return res.status(200).json({
+      success: true,
+      token,
+      user: { name: user.name, email: user.email },
+    });
+
+  } catch (err) {
+    console.error("Facebook OAuth failed:", err.response?.data || err.message);
+    return res.status(400).json({ success: false, message: "Facebook OAuth failed" });
+  }
 };
